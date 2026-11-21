@@ -9,8 +9,15 @@ Evaluates:
 
 from __future__ import annotations
 
+import sys
 import time
+from pathlib import Path
 import torch
+
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ncm.v2 import (
