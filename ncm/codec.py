@@ -114,6 +114,13 @@ class Codec(nn.Module):
         zq, idx = self.rvq(z)
         return idx
 
+    def encode_latents(self, ids):
+        h = self.adapt_in(F.embedding(ids, self.E)) + self.pos_enc
+        z = self.enc(h).view(ids.size(0), self.M, self.r, -1).mean(2)
+        z = self.q_norm(self.pre_q(z))
+        zq, idx = self.rvq(z)
+        return zq, idx
+
     def decode(self, idx, ids_teacher=None):
         zq = self.rvq.decode_idx(idx)
         lat = self.post_q(zq) + self.pos_lat
