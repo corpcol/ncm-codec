@@ -7,7 +7,8 @@ RELEASE_BASE_URL = "https://github.com/corpcol/ncm-codec/releases/download/v0.1.
 
 MODELS = {
     "4x": "codec_4x_best.pt",
-    "2x": "codec_2x_best.pt"
+    "2x": "codec_2x_best.pt",
+    "8x": "codec_8x_best.pt"
 }
 
 def get_weights_path(model_type: str = "4x") -> str:
@@ -21,6 +22,15 @@ def get_weights_path(model_type: str = "4x") -> str:
     user_cache = os.path.join(os.path.expanduser("~"), ".cache", "ncm", filename)
     if os.path.exists(user_cache):
         return os.path.abspath(user_cache)
+
+    # Local fallback search in runs directory if on host machine
+    local_runs = os.path.join("D:", os.sep, "ncm-work", "runs")
+    if os.path.exists(local_runs):
+        for run_dir in os.listdir(local_runs):
+            if model_type in run_dir:
+                p = os.path.join(local_runs, run_dir, "codec_best.pt")
+                if os.path.exists(p):
+                    return p
         
     return local_path
 

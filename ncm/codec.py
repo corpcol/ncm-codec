@@ -368,6 +368,14 @@ class Codec(nn.Module):
         else:
             self.load_state_dict(state, strict=True)
 
+    def encode_latents(self, ids: torch.Tensor):
+        zq, idx, _, _ = self.encode(ids)
+        return zq, idx
+
+    def decode(self, idx: torch.Tensor, ids_teacher: Optional[torch.Tensor] = None):
+        zq = self.rvq.decode_idx(idx)
+        return self.decode_from_zq(zq, ids_in=ids_teacher)
+
     def _embed_tokens(self, ids: torch.Tensor) -> torch.Tensor:
         raw = F.embedding(ids, self.E.to(self.adapt_in[0].weight.dtype))
         return self.adapt_in(raw)

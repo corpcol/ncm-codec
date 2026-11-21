@@ -15,6 +15,7 @@ from .generative_context import (
     saliency_aware_value_pooling,
     unapply_rope,
 )
+from .extreme_8x import NCM8xGenerativeModel
 
 __all__ = [
     "NCMGenerativeModel",
@@ -30,4 +31,5 @@ __all__ = [
     "compute_saliency_weights",
     "rope_phase_aware_key_pooling",
     "saliency_aware_value_pooling",
+    "NCM8xGenerativeModel",
 ]
