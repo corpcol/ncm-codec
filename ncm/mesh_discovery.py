@@ -23,35 +23,56 @@ class MeshDiscoveryEngine:
         pass
 
     def symbolic_screen(self, x_vals, y_vals):
-        """Algorithmic search for power invariants: y^p / x^q == constant."""
+        """Algorithmic search for power, inverse, exponential, and relativistic invariants."""
+        x_arr = np.array(x_vals, dtype=np.float64)
+        y_arr = np.array(y_vals, dtype=np.float64)
+        
+        # Candidate library across 4 physical regimes:
+        # 1. Algebraic & Power Laws
         candidates = [
-            (1, 1, "Y / X"),
-            (1, 2, "Y / X^2"),
-            (2, 1, "Y^2 / X"),
-            (2, 3, "Y^2 / X^3"),
-            (3, 2, "Y^3 / X^2"),
-            (1, 0.5, "Y / sqrt(X)"),
-            (2, 0.5, "Y^2 / sqrt(X)"),
-            (1, 1.5, "Y / X^(3/2)")
+            ("Power", lambda x, y: y / (x + 1e-12), "Y / X"),
+            ("Power", lambda x, y: y / (x**2 + 1e-12), "Y / X^2"),
+            ("Power", lambda x, y: (y**2) / (x + 1e-12), "Y^2 / X"),
+            ("Power", lambda x, y: (y**2) / (x**3 + 1e-12), "Y^2 / X^3 (Kepler)"),
+            ("Power", lambda x, y: (y**3) / (x**2 + 1e-12), "Y^3 / X^2"),
+            ("Power", lambda x, y: y / (np.sqrt(np.abs(x)) + 1e-12), "Y / sqrt(X)"),
+            ("Power", lambda x, y: y / (x**1.5 + 1e-12), "Y / X^(3/2)"),
+            ("Power", lambda x, y: y / (x**4 + 1e-12), "Y / X^4 (Stefan-Boltzmann)"),
+            # 2. Inverse & Thermodynamic Laws
+            ("Inverse", lambda x, y: y * x, "Y * X (Boyle / Isotherm)"),
+            ("Inverse", lambda x, y: y * (x**2), "Y * X^2 (Inverse Square)"),
+            ("Inverse", lambda x, y: y * (x**3), "Y * X^3"),
+            # 3. Relativistic & Bounded Manifolds (Lorentz factor gamma = 1 / sqrt(1 - beta^2))
+            ("Relativistic", lambda x, y: (1.0 / (y**2 + 1e-12)) + (x**2), "1/Y^2 + X^2 (Lorentz Invariant c=1)"),
+            ("Relativistic", lambda x, y: (1.0 / (y**2 + 1e-12)) + ((x / (np.max(x) * 1.01))**2), "1/Y^2 + (X/c)^2 (Normalized Relativistic)"),
+            # 4. Exponential & Kinetic (Arrhenius / Radioactive Decay)
+            ("Exponential", lambda x, y: np.log(np.maximum(y, 1e-12)) / (x + 1e-12), "ln(Y) / X (Exponential Rate)"),
+            ("Logarithmic", lambda x, y: y / (np.log(np.maximum(x, 1e-12)) + 1e-12), "Y / ln(X)")
         ]
+        
         results = []
-        for p, q, label in candidates:
-            ratios = []
-            for x, y in zip(x_vals, y_vals):
-                val = (y ** p) / (x ** q)
-                ratios.append(val)
-            mean_val = np.mean(ratios)
-            std_val = np.std(ratios)
-            cv = std_val / max(1e-9, abs(mean_val)) # Coefficient of variation
-            results.append({
-                "label": label,
-                "p": p,
-                "q": q,
-                "mean": round(float(mean_val), 4),
-                "std": round(float(std_val), 5),
-                "cv": round(float(cv), 6),
-                "ratios": [round(float(r), 4) for r in ratios]
-            })
+        for regime, fn, label in candidates:
+            try:
+                vals = fn(x_arr, y_arr)
+                # Filter nans or infs
+                finite_mask = np.isfinite(vals)
+                if np.count_nonzero(finite_mask) < len(x_vals) * 0.7:
+                    continue
+                v = vals[finite_mask]
+                mean_val = float(np.mean(v))
+                std_val = float(np.std(v))
+                cv = std_val / max(1e-9, abs(mean_val))
+                results.append({
+                    "regime": regime,
+                    "label": label,
+                    "mean": round(mean_val, 4),
+                    "std": round(std_val, 5),
+                    "cv": round(cv, 6),
+                    "ratios": [round(float(val), 4) for val in v]
+                })
+            except Exception:
+                pass
+                
         results.sort(key=lambda r: r["cv"])
         return results
 
