@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ncm-codec"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
   { name="corpcol" },
 ]
-description = "NCM: Lossless Neural Codec for Code Context Compression"
+description = "NCM: Lossless Neural Codec & Generative KV-Cache Context Compression for Code"
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [

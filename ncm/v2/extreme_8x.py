@@ -14,8 +14,9 @@ import torch.nn.functional as F
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from ..codec import Codec
+from ..weights import get_weights_path
 
-DEFAULT_8X_CKPT = r"D:\ncm-work\runs\r3-b70-nar-r16d2K4096\codec_best.pt"
+DEFAULT_8X_CKPT = get_weights_path("8x")
 
 class NCM8xGenerativeModel(nn.Module):
     """NCM V2 Extreme: 8x Semantic Distillation + Generative LLM KV-Cache Injection."""
