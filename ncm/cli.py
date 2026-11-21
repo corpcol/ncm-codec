@@ -1,98 +1,130 @@
-#!/usr/bin/env python3
-"""ncm CLI - High-Performance Neural Codec for Code."""
+"""Production drop-in replacement for ncm/cli.py in corpcol/ncm-codec.
 
-import sys
-import os
+Commands:
+  ncm compress <input> <output.ncm> [--ckpt weights/codec_4x_best.pt]
+  ncm decompress <input.ncm> <output.txt> [--ckpt weights/codec_4x_best.pt]
+  ncm bench <input> [--ckpt weights/codec_4x_best.pt]
+
+Aliases supported:
+  ncm encode <input> -o <output.ncm>
+  ncm decode <input.ncm> -o <output.txt>
+"""
+
+from __future__ import annotations
+
 import argparse
 import hashlib
-from .compressor import NCMCompressor
+import os
+import sys
+import time
+from pathlib import Path
 
-DEFAULT_CKPT = os.path.join(os.path.dirname(__file__), "..", "weights", "codec_4x_best.pt")
+try:
+    from .compressor import NCMCompressor
+    from .weights import get_weights_path
+except ImportError:
+    from compressor import NCMCompressor
+    try:
+        from weights import get_weights_path
+    except ImportError:
+        def get_weights_path(m="4x"):
+            return Path("../weights/codec_4x_best.pt")
 
-def file_sha256(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while chunk := f.read(65536):
-            h.update(chunk)
-    return h.hexdigest()
 
-def main():
-    parser = argparse.ArgumentParser(description="NCM: Neural Codec for Code (Lossless Binary Compressor & Tokenizer)")
-    subparsers = parser.add_subparsers(dest="cmd")
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()[:16]
 
-    # Encode
-    p_enc = subparsers.add_parser("encode", help="Compress source code into a packed .ncm binary file")
-    p_enc.add_argument("input", help="Source code file (.py, etc.)")
-    p_enc.add_argument("-o", "--out", required=True, help="Destination .ncm binary file")
-    p_enc.add_argument("--ckpt", default=DEFAULT_CKPT, help="Path to checkpoint .pt")
 
-    # Decode
-    p_dec = subparsers.add_parser("decode", help="Decompress a .ncm binary file back to exact source code")
-    p_dec.add_argument("input", help="Source .ncm binary file")
-    p_dec.add_argument("-o", "--out", required=True, help="Destination restored file")
-    p_dec.add_argument("--ckpt", default=DEFAULT_CKPT, help="Path to checkpoint .pt")
+def resolve_ckpt(ckpt_arg: Path | None) -> Path:
+    if ckpt_arg is not None and ckpt_arg.exists():
+        return ckpt_arg
+    standard = Path(get_weights_path("4x"))
+    if standard.exists():
+        return standard
+    if ckpt_arg is not None:
+        return ckpt_arg
+    return Path("weights/codec_4x_best.pt")
 
-    # Bench
-    p_bench = subparsers.add_parser("bench", help="Benchmark compression ratio, on-disk size, and exact lossless recovery")
-    p_bench.add_argument("input", help="Source code file")
-    p_bench.add_argument("--ckpt", default=DEFAULT_CKPT, help="Path to checkpoint .pt")
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="ncm", description="NCM Neural Arithmetic Codec CLI")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    for name in ("compress", "decompress", "bench", "encode", "decode"):
+        p = sub.add_parser(name)
+        p.add_argument("input", type=Path, help="Input file path")
+        if name in ("compress", "decompress", "encode", "decode"):
+            # Allow positional output or -o/--out
+            p.add_argument("output", type=Path, nargs="?", default=None, help="Output destination")
+            p.add_argument("-o", "--out", type=Path, default=None, help="Output destination alias")
+        p.add_argument("--ckpt", type=Path, default=None, help="Path to checkpoint .pt")
+        p.add_argument("--tokenizer", type=str, default="Qwen/Qwen2.5-0.5B")
+        p.add_argument("--top-k", type=int, default=64)
+        p.add_argument("--device", type=str, default=None)
 
     args = parser.parse_args()
-    if not args.cmd:
-        parser.print_help()
+    cmd = "compress" if args.cmd == "encode" else ("decompress" if args.cmd == "decode" else args.cmd)
+
+    output_path = getattr(args, "output", None) or getattr(args, "out", None)
+    if cmd in ("compress", "decompress") and output_path is None:
+        parser.error(f"Command '{args.cmd}' requires an output file path (either as positional arg or with -o/--out)")
+
+    ckpt_path = resolve_ckpt(args.ckpt)
+    if not ckpt_path.exists():
+        print(f"[!] Warning: Checkpoint not found at {ckpt_path}.")
+        print("    Run with --ckpt <path> or train weights with `python training/train.py`.")
         sys.exit(1)
 
-    if not os.path.exists(args.ckpt):
-        # Look in runs or parent dirs if default doesn't exist
-        alt = r"D:\ncm-work\runs\r3-5080-ar-r8d2K4096\codec_best.pt"
-        if os.path.exists(alt):
-            args.ckpt = alt
-        else:
-            print(f"Error: Checkpoint not found at {args.ckpt}.")
-            print("Run with --ckpt <path/to/codec.pt> or download weights.")
-            sys.exit(1)
+    comp = NCMCompressor(
+        ckpt_path=str(ckpt_path),
+        tokenizer_name=args.tokenizer,
+        device=args.device,
+        top_k=args.top_k,
+    )
 
-    comp = NCMCompressor(args.ckpt)
+    if cmd == "compress":
+        text = args.input.read_text(encoding="utf-8")
+        t0 = time.perf_counter()
+        res = comp.compress_text(text, verify=True)
+        dt = time.perf_counter() - t0
+        if not res.exact_match:
+            raise RuntimeError("Lossless verification FAILED!")
+        output_path.write_bytes(res.blob)
+        print(
+            f"[OK] {args.input.name} -> {output_path.name} | "
+            f"{res.raw_bytes:,} B -> {res.compressed_bytes:,} B "
+            f"({res.actual_bpt:.3f} bpt vs lzma-9 {res.lzma9_bpt:.3f} bpt) | "
+            f"top1={res.top1_acc*100:.1f}% topK={res.topk_hit_rate*100:.1f}% "
+            f"oov={res.oov_rate*100:.2f}% | {dt:.2f}s | SHA256={_sha256(text.encode('utf-8'))}"
+        )
 
-    if args.cmd == "encode":
-        if not os.path.exists(args.input):
-            print(f"Error: Input file {args.input} not found.")
-            sys.exit(1)
-        orig_sz, comp_sz = comp.compress_file(args.input, args.out)
-        ratio = orig_sz / max(1, comp_sz)
-        print(f"[*] Compressed {args.input} -> {args.out}")
-        print(f"    Original Size   : {orig_sz:,} bytes")
-        print(f"    Compressed Size : {comp_sz:,} bytes")
-        print(f"    Compression     : {ratio:.2f}x ({100 * (1 - comp_sz / orig_sz):.1f}% reduction)")
-        print(f"    SHA256 (Source) : {file_sha256(args.input)}")
+    elif cmd == "decompress":
+        blob = args.input.read_bytes()
+        t0 = time.perf_counter()
+        text = comp.decompress_text(blob)
+        dt = time.perf_counter() - t0
+        output_path.write_text(text, encoding="utf-8")
+        print(
+            f"[OK] {args.input.name} -> {output_path.name} | "
+            f"{len(blob):,} B -> {len(text.encode('utf-8')):,} B | "
+            f"{dt:.2f}s | SHA256={_sha256(text.encode('utf-8'))}"
+        )
 
-    elif args.cmd == "decode":
-        if not os.path.exists(args.input):
-            print(f"Error: Input file {args.input} not found.")
-            sys.exit(1)
-        comp_sz, rest_sz = comp.decompress_file(args.input, args.out)
-        print(f"[*] Decompressed {args.input} -> {args.out}")
-        print(f"    Compressed Size : {comp_sz:,} bytes")
-        print(f"    Restored Size   : {rest_sz:,} bytes")
-        print(f"    SHA256 (Output) : {file_sha256(args.out)}")
+    elif cmd == "bench":
+        text = args.input.read_text(encoding="utf-8")
+        t0 = time.perf_counter()
+        res = comp.compress_text(text, verify=True)
+        dt = time.perf_counter() - t0
+        ratio_vs_raw = res.raw_bytes / max(res.compressed_bytes, 1)
+        ratio_vs_lzma = res.lzma9_bytes / max(res.compressed_bytes, 1)
+        print(
+            f"File: {args.input.name} ({res.orig_num_tokens:,} tokens, {res.raw_bytes:,} B)\n"
+            f"  NCM2 Actual : {res.compressed_bytes:,} B ({res.actual_bpt:.3f} bpt, {ratio_vs_raw:.2f}x vs raw)\n"
+            f"  lzma -9     : {res.lzma9_bytes:,} B ({res.lzma9_bpt:.3f} bpt) | NCM2 vs lzma: {ratio_vs_lzma:.2f}x\n"
+            f"  Stats       : top1={res.top1_acc*100:.2f}% | topK={res.topk_hit_rate*100:.2f}% | "
+            f"oov={res.oov_rate*100:.2f}% | exact={res.exact_match} | time={dt:.2f}s"
+        )
 
-    elif args.cmd == "bench":
-        if not os.path.exists(args.input):
-            print(f"Error: Input file {args.input} not found.")
-            sys.exit(1)
-        with open(args.input, "r", encoding="utf-8", errors="ignore") as f:
-            text = f.read()
-        print(f"[*] Benchmarking NCM on {args.input} ({len(text):,} chars)...")
-        res = comp.benchmark_text(text)
-        print("\n================== NCM Compression Results ==================")
-        print(f"  Exact Bit-for-Bit Lossless : {res['exact_match']}")
-        print(f"  Original Tokens            : {res['n_tokens']:,}")
-        print(f"  Original File Size         : {res['orig_bytes']:,} bytes")
-        print(f"  Packed .ncm Bitstream      : {res['compressed_bytes']:,} bytes")
-        print(f"  Empirical Bits / Token     : {res['empirical_bpt']:.2f} bpt")
-        print(f"  Physical Data Reduction    : {res['compression_ratio']:.2f}x")
-        print(f"  Throughput (Encode / Decode): {res['encode_time_s']:.3f}s / {res['decode_time_s']:.3f}s")
-        print("============================================================\n")
 
 if __name__ == "__main__":
     main()
