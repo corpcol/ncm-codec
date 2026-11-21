@@ -24,8 +24,32 @@ class MeshRouter:
         self.rtx_endpoint = rtx_endpoint
 
     def check_health(self):
-        """Verify status across all 3 physical nodes."""
+        """Verify status across all 3 physical nodes and cooperative resource locks."""
         status = {}
+        # 0. Cooperative StarkLab Lock Check
+        starklab_lock = r"C:\Users\Public\mesh-guard\starklab-active.lock"
+        starklab_active = False
+        if os.path.exists(starklab_lock):
+            try:
+                with open(starklab_lock, "r", encoding="utf-8") as f:
+                    claim = json.load(f)
+                pid = claim.get("pid")
+                if pid:
+                    res = subprocess.run(["tasklist", "/fi", f"PID eq {pid}", "/fo", "csv", "/nh"], capture_output=True, text=True)
+                    out_lower = res.stdout.lower()
+                    if str(pid) in out_lower and ("python" in out_lower or "server" in out_lower):
+                        starklab_active = True
+                        status["starklab_cooperative_lock"] = {"status": "active", "pid": pid, "policy": "workstation_gpu_prioritized"}
+                    else:
+                        try: os.remove(starklab_lock) # clean stale or recycled lock
+                        except Exception: pass
+            except (json.JSONDecodeError, OSError):
+                # Temporary read during atomic replace, pass safely
+                pass
+            except Exception: pass
+        if not starklab_active:
+            status["starklab_cooperative_lock"] = {"status": "idle", "policy": "cluster_headroom_100pct"}
+
         # 1. Mac Studio
         try:
             req = urllib.request.Request(f"{self.studio_gateway}/health", headers={"User-Agent": "mesh-router"})
@@ -115,14 +139,20 @@ print(f"SLOTS={{idx.numel()//2}}|TIME={{t_elap:.4f}}|TOK_S={{{token_count}/t_ela
             xs, ys = self.detect_tabular_pairs(context + " " + prompt)
             if xs and ys and len(xs) >= 4:
                 import numpy as np
-                # Sub-millisecond log-log correlation check
+                # Sub-millisecond log-log correlation check with zero/negative masking
                 try:
-                    lx, ly = np.log(np.abs(xs)), np.log(np.abs(ys))
-                    r = np.corrcoef(lx, ly)[0, 1]
-                    if abs(r) > 0.995: # High confidence physical invariant
-                        from mesh_discovery import MeshDiscoveryEngine
-                        engine = MeshDiscoveryEngine()
-                        discovery_insight = engine.discover_law("Implicit High-Confidence Invariant", xs, ys)
+                    xs_arr = np.array(xs, dtype=np.float64)
+                    ys_arr = np.array(ys, dtype=np.float64)
+                    valid_mask = (np.abs(xs_arr) > 1e-12) & (np.abs(ys_arr) > 1e-12)
+                    if np.count_nonzero(valid_mask) >= 4:
+                        lx = np.log(np.abs(xs_arr[valid_mask]))
+                        ly = np.log(np.abs(ys_arr[valid_mask]))
+                        if np.std(lx) > 1e-9 and np.std(ly) > 1e-9:
+                            r = np.corrcoef(lx, ly)[0, 1]
+                            if not np.isnan(r) and abs(r) > 0.995: # High confidence physical invariant
+                                from mesh_discovery import MeshDiscoveryEngine
+                                engine = MeshDiscoveryEngine()
+                                discovery_insight = engine.discover_law("Implicit High-Confidence Invariant", xs, ys)
                 except Exception:
                     pass
 
@@ -160,7 +190,88 @@ print(f"SLOTS={{idx.numel()//2}}|TIME={{t_elap:.4f}}|TOK_S={{{token_count}/t_ela
             ans = res.get("response", "").strip()
             return {"node": "NVIDIA RTX 5080", "model": "qwen2.5:14b-instruct", "response": ans, "latency": round(time.time() - t0, 2), "compression": comp_info, "discovery": discovery_insight}
 
-if __name__ == "__main__":
+TOKEN_FILE = r"C:\Users\Public\mesh-guard\token.txt"
+
+def get_mesh_token():
+    t = os.environ.get("MESH_NODE_TOKEN", "").strip()
+    if t: return t
+    if os.path.exists(TOKEN_FILE):
+        try: return open(TOKEN_FILE, encoding="utf-8").read().strip()
+        except: pass
+    return ""
+
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class MeshLANProxyHandler(BaseHTTPRequestHandler):
     router = MeshRouter()
-    print("[*] Mesh Router Health Check:")
-    print(json.dumps(router.check_health(), indent=2))
+
+    def _is_authorized(self):
+        client_ip = self.client_address[0]
+        if client_ip in ("127.0.0.1", "::1", "localhost"):
+            return True
+        token = get_mesh_token()
+        if not token:
+            return False
+        req_token = self.headers.get("X-Mesh-Token", "").strip()
+        return req_token == token
+
+    def _send_json(self, data, code=200):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode("utf-8"))
+
+    def do_GET(self):
+        if not self._is_authorized():
+            self._send_json({"error": "Unauthorized: valid X-Mesh-Token required"}, 401)
+            return
+        if self.path in ("/health", "/v1/health"):
+            self._send_json(self.router.check_health())
+        else:
+            self._send_json({"error": "Not found"}, 404)
+
+    def do_POST(self):
+        if not self._is_authorized():
+            self._send_json({"error": "Unauthorized: valid X-Mesh-Token required"}, 401)
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
+        try: req = json.loads(body)
+        except Exception as e:
+            self._send_json({"error": f"Invalid JSON: {e}"}, 400)
+            return
+
+        if self.path == "/v1/dispatch":
+            prompt = req.get("prompt", "")
+            context = req.get("context", "")
+            tier = req.get("tier", "auto")
+            discover = req.get("discover", False)
+            res = self.router.dispatch(prompt, context=context, tier=tier, discover=discover)
+            self._send_json(res)
+        elif self.path == "/v1/b70/ingest":
+            token_count = int(req.get("token_count", 1024))
+            res = self.router.ingest_context_b70(token_count)
+            self._send_json(res)
+        elif self.path in ("/v1/fast/generate", "/api/generate"):
+            url = f"{self.router.rtx_endpoint}/api/generate"
+            r = urllib.request.Request(url, data=json.dumps(req).encode(), headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(r, timeout=30) as resp:
+                    data = json.loads(resp.read().decode())
+                self._send_json(data)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 502)
+        else:
+            self._send_json({"error": "Not found"}, 404)
+
+if __name__ == "__main__":
+    if "--serve" in sys.argv:
+        port = 8782
+        server = HTTPServer(("0.0.0.0", port), MeshLANProxyHandler)
+        print(f"[*] Mesh LAN Token-Gated Proxy listening on 0.0.0.0:{port}...")
+        server.serve_forever()
+    else:
+        router = MeshRouter()
+        print("[*] Mesh Router Health Check:")
+        print(json.dumps(router.check_health(), indent=2))
