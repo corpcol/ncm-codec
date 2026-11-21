@@ -16,10 +16,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-PORT = 8796
-OUTPUT_DIR = r"C:\Users\carlos palomo\CarlosOS\Mesh\videos"
+from pathlib import Path
+
+PORT = int(os.environ.get("MESH_VIDEO_PORT", 8796))
+OUTPUT_DIR = os.environ.get("MESH_VIDEO_DIR", str(Path.home() / ".mesh" / "videos"))
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-TOKEN_FILE = r"C:\Users\Public\mesh-guard\token.txt"
+TOKEN_FILE = os.environ.get("MESH_TOKEN_FILE", str(Path.home() / ".mesh" / "token.txt"))
 
 def get_mesh_token():
     t = os.environ.get("MESH_NODE_TOKEN", "").strip()

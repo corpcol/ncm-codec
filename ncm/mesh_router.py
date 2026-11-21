@@ -13,10 +13,15 @@ import json
 import urllib.request
 import subprocess
 
-MAC_STUDIO_GATEWAY = "http://192.168.1.159:8780"
-RTX_5080_ENDPOINT = "http://localhost:11434"
-B70_PYTHON = r"C:\Users\carlos palomo\ai-venvs\xpu-venv\Scripts\python.exe"
-B70_CKPT = r"D:\ncm-work\runs\r3-b70-nar-r16d2K4096\codec_best.pt"
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MAC_STUDIO_GATEWAY = os.environ.get("MAC_STUDIO_GATEWAY", "http://127.0.0.1:8780")
+RTX_5080_ENDPOINT = os.environ.get("RTX_ENDPOINT", "http://localhost:11434")
+B70_PYTHON = os.environ.get("B70_PYTHON", sys.executable)
+B70_CKPT = os.environ.get("B70_CKPT", "")
+STARKLAB_LOCK = os.environ.get("STARKLAB_LOCK_FILE", str(Path.home() / ".mesh" / "starklab-active.lock"))
+TOKEN_FILE = os.environ.get("MESH_TOKEN_FILE", str(Path.home() / ".mesh" / "token.txt"))
 
 class MeshRouter:
     def __init__(self, studio_gateway=MAC_STUDIO_GATEWAY, rtx_endpoint=RTX_5080_ENDPOINT):
@@ -27,7 +32,7 @@ class MeshRouter:
         """Verify status across all 3 physical nodes and cooperative resource locks."""
         status = {}
         # 0. Cooperative StarkLab Lock Check
-        starklab_lock = r"C:\Users\Public\mesh-guard\starklab-active.lock"
+        starklab_lock = STARKLAB_LOCK
         starklab_active = False
         if os.path.exists(starklab_lock):
             try:
@@ -76,7 +81,7 @@ class MeshRouter:
 import sys, time, torch
 try: torch.backends.mha.set_fastpath_enabled(False)
 except: pass
-sys.path.insert(0, r"C:\\Users\\carlos palomo\\CarlosOS\\Mesh\\ncm-release")
+sys.path.insert(0, r"{REPO_ROOT}")
 from ncm.codec import Codec
 dev = torch.device("xpu")
 ck = torch.load(r"{B70_CKPT}", map_location="cpu", weights_only=False)
@@ -189,8 +194,6 @@ print(f"SLOTS={{idx.numel()//2}}|TIME={{t_elap:.4f}}|TOK_S={{{token_count}/t_ela
                 res = json.loads(resp.read().decode())
             ans = res.get("response", "").strip()
             return {"node": "NVIDIA RTX 5080", "model": "qwen2.5:14b-instruct", "response": ans, "latency": round(time.time() - t0, 2), "compression": comp_info, "discovery": discovery_insight}
-
-TOKEN_FILE = r"C:\Users\Public\mesh-guard\token.txt"
 
 def get_mesh_token():
     t = os.environ.get("MESH_NODE_TOKEN", "").strip()

@@ -15,8 +15,8 @@ import math
 import urllib.request
 import numpy as np
 
-STUDIO_URL = "http://192.168.1.159:8780/v1/chat/completions"
-RTX_URL = "http://localhost:11434/api/generate"
+STUDIO_URL = os.environ.get("MESH_STUDIO_URL", "http://127.0.0.1:8780/v1/chat/completions")
+RTX_URL = os.environ.get("MESH_RTX_URL", "http://127.0.0.1:11434/api/generate")
 
 class MeshDiscoveryEngine:
     def __init__(self):
