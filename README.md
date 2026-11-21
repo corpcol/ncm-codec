@@ -1,16 +1,18 @@
-# NCM: Neural Codec for Code (Lossless Context Compression)
+# NCM: Neural Codec for Code & Generative Context Compression
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 
-**NCM (Neural Context Model)** is a lightweight (26.9M parameter) neural tokenizer and context compressor designed to expand the effective context window of Large Language Models. 
+**NCM (Neural Context Model)** is an open-source neural tokenizer, binary context compressor, and generative KV-cache optimization framework designed to scale LLM context capacity.
 
-By combining **Transformer Autoencoders**, **Residual Vector Quantization (RVQ)**, and **Causal Arithmetic Escape Decoding**, NCM compresses raw token streams by up to **4x (0.25 codes/token)** while guaranteeing **100% bit-for-bit exact lossless recovery**, outperforming classical industry-standard compression (`lzma -9`) by **18%**.
+NCM bridges the gap between neural discrete tokenization and generative inference:
+* **Stage 1 (Binary Codec):** Transformer Autoencoders + Residual Vector Quantization (RVQ) + Causal Escape Arithmetic. Compresses code into a real packed `.ncm` binary bitstream at **4x token reduction (0.25 codes/token)** with **100% exact bit-for-bit lossless recovery**, outperforming `lzma -9` by **18%**.
+* **Stage 2 (Generative NCM V2):** In-Context Autoencoder & KV-Cache Injection. Attaches to pretrained LLMs (e.g., Qwen 2.5, Llama 3) to compress prompt context by 4x, slashing active GPU KV-cache memory by **75%** while enabling generative inference directly over compressed states.
 
 ---
 
-## 🚀 Key Benchmarks
+## 🚀 Benchmark Highlights
 
 Evaluated across the standard 12-file heldout benchmark suite (91,434 tokens) from the Python Standard Library:
 
@@ -25,7 +27,7 @@ Evaluated across the standard 12-file heldout benchmark suite (91,434 tokens) fr
 All decompressed code was tested via AST compilation (`ast.parse`) and dynamic isolated runtime execution (`exec()`):
 
 | Domain | Payload Type | Bit-for-Bit Exact | Runtime Tests Passed | NCM 4x Ratio | `lzma -9` Ratio | Advantage vs LZMA |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| :--- | :--- | :---: | :---: | :---: | :---: |
 | **Algorithms** | LRU Cache & Quicksort | **Yes** | **Passed** | **7.60 bpt** | 14.19 bpt | **46% smaller** |
 | **Web Services** | URL Query & JSON Parser | **Yes** | **Passed** | **10.21 bpt** | 21.41 bpt | **52% smaller** |
 | **Systems / OS** | Directory Walker & Archiver | **Yes** | **Passed** | **9.26 bpt** | 22.02 bpt | **58% smaller** |
@@ -36,55 +38,94 @@ All decompressed code was tested via AST compilation (`ast.parse`) and dynamic i
 ## 🧠 Architectural Overview
 
 ```
+                                  [STAGE 1: BINARY CODEC]
 Raw Token Stream (x1, x2, ..., xN)
        │
        ▼ [Frozen Qwen 2.5 Embeddings]
-       │
 ┌──────────────┐
 │  Transformer │  Encodes L=64 tokens into M = L/r continuous latents
-│   Encoder    │  (e.g., r=8 maps 8 tokens to 1 latent vector)
+│   Encoder    │  (r=8 maps 8 tokens to 1 latent vector)
 └──────┬───────┘
        ▼
 ┌──────────────┐
-│ Residual VQ  │  Quantizes into depth=2 discrete codebook indices
+│ Residual VQ  │  Quantizes into depth=2 discrete codebook indices (K=4096)
 │ (K=4096, d=2)│  Level 1: Macro semantics (syntax, control flow)
 └──────┬───────┘  Level 2: Micro residual (identifiers, literals)
        ▼
 ┌──────────────┐
-│  Causal AR   │  Autoregressive decoder predicts original tokens.
-│   Decoder    │  Any prediction mismatch triggers an exact escape.
+│  Causal AR   │  Autoregressive decoder + deterministic escape bitstream.
+│   Decoder    │  Packed into .ncm container bitstream with 12-bit code alignment.
 └──────┬───────┘
        ▼
-100% Exact Reconstructed Source Code
+100% Exact Reconstructed Source Code (Verified Cryptographic SHA-256)
+
+                                  [STAGE 2: GENERATIVE NCM V2]
+Raw Prompt Context (e.g., 32k Tokens)
+       │
+       ▼ [NCM Context Encoder]
+Compressed Latent Memory (8k Slots — 4x Reduction)
+       │
+       ▼ [NCM KV-Projector]
+Injected into Pretrained LLM Attention Keys & Values (75% VRAM Reduction)
+       │
+       ▼
+LLM Generates & Reasons Directly Over 4x Compressed KV Cache!
 ```
 
 ---
 
-## 📦 Quick Start
+## 📦 Quick Start & CLI Usage
 
-### Installation
+### 1. Installation
 ```bash
 git clone https://github.com/corpcol/ncm-codec.git
 cd ncm-codec
 pip install -e .
 ```
 
-### Quick Benchmark
+### 2. Compress a File into a Binary `.ncm` Bitstream
 ```bash
-python -m ncm.cli bench path/to/script.py --ckpt weights/codec_4x_best.pt
+python -m ncm.cli encode my_script.py -o my_script.ncm
 ```
 
-### Python API
+### 3. Decompress `.ncm` Back to Bit-for-Bit Exact Source
+```bash
+python -m ncm.cli decode my_script.ncm -o restored.py
+```
+
+### 4. Benchmark Compression & Lossless Fidelity
+```bash
+python -m ncm.cli bench my_script.py
+```
+
+### 5. Generative Inference over Compressed Context (NCM V2)
 ```python
-from ncm import NCMCompressor
+from ncm.v2 import NCMGenerativeModel
 
-compressor = NCMCompressor("weights/codec_4x_best.pt")
-code = open("my_project.py").read()
+# Wrap pretrained Qwen 2.5 with 4x context compression
+model = NCMGenerativeModel("Qwen/Qwen2.5-0.5B", compression_factor=4)
 
-result = compressor.compress_text(code)
-print(f"Compressed to: {result['bits_per_token']:.2f} bits/token")
-print(f"Exact lossless match: {result['exact_match']}")
+context_code = open("large_file.py").read()
+query = "What classes are defined in this module?"
+
+# Ingests context into 75% compressed KV cache and generates response
+result = model.generate_with_compressed_context(context_code, query)
+print(result["response"])
+print(f"KV Cache Savings: {result['kv_memory_savings']}")
 ```
+
+---
+
+## 🏋️ Training Pipeline
+The full, multi-accelerator training pipeline is located under `training/`:
+```bash
+# Train 4x compression regime on CUDA
+python training/train.py --data ./data --out ./runs/4x --mode ar --r 8 --depth 2 --steps 50000
+
+# Train on Intel Arc Pro (oneAPI XPU)
+NCM_DEVICE=xpu python training/train.py --data ./data --out ./runs/8x --mode nar --r 16
+```
+See [training/README.md](training/README.md) for details.
 
 ---
 
