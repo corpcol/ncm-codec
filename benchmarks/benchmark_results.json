@@ -1,0 +1,46 @@
+[
+  {
+    "domain": "Algorithms & Data Structures",
+    "n_tokens": 230,
+    "exact_match": true,
+    "ast_valid": true,
+    "exec_passed": true,
+    "time_s": 1.604790449142456,
+    "lossless_bits_per_token": 7.603700323912874,
+    "lzma9_bits_per_token": 14.191304347826087,
+    "beats_lzma": true
+  },
+  {
+    "domain": "Web Services & JSON APIs",
+    "n_tokens": 148,
+    "exact_match": true,
+    "ast_valid": true,
+    "exec_passed": true,
+    "time_s": 0.16231632232666016,
+    "lossless_bits_per_token": 10.210095025500292,
+    "lzma9_bits_per_token": 21.405405405405407,
+    "beats_lzma": true
+  },
+  {
+    "domain": "Systems, Processes & Filesystem IO",
+    "n_tokens": 170,
+    "exact_match": true,
+    "ast_valid": true,
+    "exec_passed": true,
+    "time_s": 0.15860557556152344,
+    "lossless_bits_per_token": 9.262546847926734,
+    "lzma9_bits_per_token": 22.023529411764706,
+    "beats_lzma": true
+  },
+  {
+    "domain": "Numerical Analysis & Mathematics",
+    "n_tokens": 258,
+    "exact_match": true,
+    "ast_valid": true,
+    "exec_passed": true,
+    "time_s": 0.17477869987487793,
+    "lossless_bits_per_token": 7.828509466250954,
+    "lzma9_bits_per_token": 10.666666666666666,
+    "beats_lzma": true
+  }
+]
