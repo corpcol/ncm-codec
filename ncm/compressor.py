@@ -335,13 +335,16 @@ class NCMCompressor:
         if self.vocab is not None:
             self.raw_to_compact = {int(raw_id): i for i, raw_id in enumerate(self.vocab)}
             self.compact_to_raw = np.asarray(self.vocab, dtype=np.int64)
-            compact_V = len(self.vocab)
+            # Checkpoint embedding table has 1 extra slot (len(vocab) + 1) for padding / EOS
+            state_E = ckpt.get("state", {}).get("E")
+            compact_V = state_E.shape[0] if state_E is not None else (len(self.vocab) + 1)
         else:
             self.raw_to_compact = None
             self.compact_to_raw = None
-            compact_V = cfg["V"]
+            compact_V = cfg.get("V", ckpt["state"]["E"].shape[0] if "E" in ckpt.get("state", {}) else 62571)
 
-        dummy_E = torch.zeros(compact_V, cfg["dt"])
+        dt = cfg.get("dt") or (ckpt["state"]["E"].shape[1] if "E" in ckpt.get("state", {}) else cfg.get("d", 512))
+        dummy_E = torch.zeros(compact_V, dt)
         self.codec = Codec(
             E=dummy_E,
             L=cfg["L"],
@@ -599,6 +602,12 @@ class NCMCompressor:
 
     def decompress_text(self, blob: bytes) -> str:
         return self.tokenizer.decode(self.decompress_tokens(blob), skip_special_tokens=False)
+
+    def compress_to_bytes(self, text: str, verify: bool = True) -> bytes:
+        return self.compress_text(text, verify=verify).blob
+
+    def decompress_from_bytes(self, blob: bytes) -> str:
+        return self.decompress_text(blob)
 
     def compress_file(
         self, input_path: Union[str, Path], output_path: Union[str, Path], verify: bool = True
