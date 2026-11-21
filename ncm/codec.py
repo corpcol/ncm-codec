@@ -141,16 +141,15 @@ class Codec(nn.Module):
 
     def decode_from_zq(self, zq, ids_so_far):
         B = zq.size(0)
-        lat = self.post_q(zq) + self.pos_lat
-        tok = F.embedding(ids_so_far, self.E)
-        tok_emb = self.adapt_tok(tok)
+        lat = self.post_q(zq) + self.pos_lat[None]
+        tok = self.adapt_tok(F.embedding(ids_so_far, self.E))
         prefix = self.bos[None, None, :].expand(B, 1, -1)
-        if tok_emb.size(1) > 0:
-            tok_in = torch.cat([prefix, tok_emb[:, :-1]], 1)
+        if tok.size(1) > 0:
+            tok_in = torch.cat([prefix, tok[:, :-1]], 1)
         else:
             tok_in = prefix
         T = tok_in.size(1)
-        tok_in = tok_in + self.pos_dec[:, :T]
+        tok_in = tok_in + self.pos_dec[None, :T]
         seq = torch.cat([lat, tok_in], 1)
         mask = self.ar_mask[:seq.size(1), :seq.size(1)]
         out = self.dec(seq, mask=mask)[:, self.M:]

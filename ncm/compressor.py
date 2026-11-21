@@ -75,7 +75,7 @@ class NCMCompressor:
                 esc.append(e)
 
         roundtrip_compact = torch.cat(yes).reshape(-1)[:n_tokens].cpu().numpy()
-        recovered_ids = self.back[roundtrip_compact]
+        recovered_ids = [int(t) for t in self.back[roundtrip_compact] if t >= 0]
         decompressed_text = self.hf.decode(recovered_ids)
         
         escapes_count = int(torch.cat(esc).reshape(-1)[:n_tokens].sum())
