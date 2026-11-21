@@ -82,6 +82,59 @@ class TestNCMV2(unittest.TestCase):
         for logits in logits_list:
             self.assertEqual(logits.shape, (2, 10, vocab_size))
 
+    def test_rope_phase_aware_key_pooling_norm_preservation(self):
+        """Verify harmonic phase unwrapping preserves vector norm against destructive RoPE cancellation."""
+        from ncm.v2 import apply_rope, rope_phase_aware_key_pooling
+
+        B, H, N, D, r = 1, 1, 16, 64, 4
+        rope_theta = 10000.0  # Use smaller theta base to induce high-frequency rotation
+        M = N // r
+
+        # Generate constant semantic vector and rotate it across sequence
+        inv_freq = 1.0 / (rope_theta ** (torch.arange(0, D, 2, dtype=torch.float32) / D))
+        inv_freq = torch.cat([inv_freq, inv_freq], dim=-1)
+        pos = torch.arange(N, dtype=torch.float32).unsqueeze(-1)
+        angles = (pos * inv_freq.unsqueeze(0)).unsqueeze(0).unsqueeze(0)
+
+        base_key = torch.randn(1, 1, 1, D)
+        base_key = base_key / base_key.norm(dim=-1, keepdim=True)
+        keys = apply_rope(base_key.expand(B, H, N, D), angles)
+
+        # Naive mean pooling across chunks
+        naive_pooled = keys.view(B, H, M, r, D).mean(dim=3)
+        naive_norm = naive_pooled.norm(dim=-1).mean().item()
+
+        # Phase-aware harmonic unwrapped pooling
+        phase_pooled = rope_phase_aware_key_pooling(keys, r=r, rope_theta=rope_theta)
+        phase_norm = phase_pooled.norm(dim=-1).mean().item()
+
+        self.assertEqual(phase_pooled.shape, (B, H, M, D))
+        # Phase-aware pooling must achieve virtually 100% norm preservation (>= 0.999)
+        self.assertGreater(phase_norm, 0.999)
+        self.assertGreater(phase_norm, naive_norm)
+
+    def test_saliency_aware_value_pooling(self):
+        """Verify saliency weighting allocates retention proportionally to Key L2 norm."""
+        from ncm.v2 import compute_saliency_weights, saliency_aware_value_pooling
+
+        B, H, N, D, r = 1, 1, 8, 32, 4
+        M = N // r
+
+        k = torch.ones(B, H, N, D) * 0.1
+        # Make token 1 in chunk 0 a dominant heavy-hitter identifier
+        k[0, 0, 1] = 50.0
+
+        v = torch.randn(B, H, N, D)
+        weights = compute_saliency_weights(k, r=r, temperature=1.0)
+        v_pooled = saliency_aware_value_pooling(v, weights, r=r)
+
+        self.assertEqual(v_pooled.shape, (B, H, M, D))
+        # The pooled value for chunk 0 should closely match token 1's value (> 0.999 cosine sim)
+        chunk0_v = v_pooled[0, 0, 0]
+        token1_v = v[0, 0, 1]
+        sim = F.cosine_similarity(chunk0_v, token1_v, dim=0).item()
+        self.assertGreater(sim, 0.999)
+
 
 if __name__ == "__main__":
     unittest.main()
